@@ -41,6 +41,7 @@
   button:hover { border-color: var(--accent); }
   .toggle { display: flex; align-items: center; gap: 6px; cursor: pointer; }
   .toggle input { width: 16px; height: 16px; accent-color: #9c4dcc; }
+  .modes { display: flex; gap: 20px; justify-content: center; align-items: center; margin-top: 10px; }
   #purpleStatus { width: 100%; text-align: center; font-size: 13px; color: #ce93d8; min-height: 18px; }
   .hint { font-size: 13px; color: var(--muted); line-height: 1.6; margin-top: 14px; }
 </style>
@@ -49,7 +50,7 @@
 <div id="app">
   <h1>轉珠遊戲</h1>
   <div class="hud">
-    <div class="stat"><div class="label">分數</div><div class="value" id="score">0</div></div>
+    <div class="stat"><div class="label">平均 Combo</div><div class="value" id="avgCombo">0.00</div></div>
     <div class="stat"><div class="label">本回合 Combo</div><div class="value" id="curCombo">0</div></div>
     <div class="stat"><div class="label">最高 Combo</div><div class="value" id="bestCombo">0</div></div>
   </div>
@@ -68,10 +69,12 @@
         <option value="10">10 秒</option>
       </select>
     </label>
+  </div>
+  <div class="modes">
     <label class="toggle"><input type="checkbox" id="purpleMode">蓄珠模式</label>
     <label class="toggle"><input type="checkbox" id="glowMode">超多珠模式</label>
-    <div id="purpleStatus"></div>
   </div>
+  <div id="purpleStatus"></div>
   <p class="hint">
     按住珠子拖曳，經過的珠子會和手上的珠子交換位置（可斜走）。<br>
     第一次交換後開始倒數，放開或時間到就結算。同色橫向或直向連成 3 顆以上即消除，落下的珠子若再相連會形成連鎖 Combo。<br>
@@ -98,7 +101,7 @@
   const stage = document.getElementById('stage');
   const timeFill = document.getElementById('timefill');
   const resultEl = document.getElementById('result');
-  const scoreEl = document.getElementById('score');
+  const avgComboEl = document.getElementById('avgCombo');
   const curComboEl = document.getElementById('curCombo');
   const bestComboEl = document.getElementById('bestCombo');
   const timeSel = document.getElementById('timeSel');
@@ -114,7 +117,8 @@
   let held = null;         // { r, c } position of held orb
   let pointer = { x: 0, y: 0 };
   let timerStart = 0, timerRunning = false, moved = false;
-  let score = 0, bestCombo = 0;
+  let bestCombo = 0;
+  let turns = 0, totalCombo = 0;  // 平均 Combo = 總 Combo ÷ 回合數（沒消珠的回合也算）
   let pendingEnhanced = [];  // 下一次落珠要掉下的發光珠顏色
   // 蓄珠模式
   let purpleNext = 0;        // 下一個回合要掉的紫珠數
@@ -431,14 +435,13 @@
     purpleNext = 0;
     updatePurpleStatus();
     await waitSettled();
-    let combo = 0, cleared = 0, gained = 0;
+    let combo = 0, cleared = 0;
     while (true) {
       const groups = findGroups();
       if (!groups.length) break;
       for (const g of groups) {
         combo++;
         cleared += g.length;
-        gained += g.length * 10;
         curComboEl.textContent = combo;
         beep(combo);
         const gt = board[g[0][0]][g[0][1]].t;
@@ -460,14 +463,13 @@
       await waitSettled();
       await sleep(80);
     }
+    turns++;
+    totalCombo += combo;
+    avgComboEl.textContent = (totalCombo / turns).toFixed(2);
     if (combo > 0) {
-      const mult = 1 + (combo - 1) * 0.25;
-      const total = Math.round(gained * mult);
-      score += total;
       bestCombo = Math.max(bestCombo, combo);
-      scoreEl.textContent = score;
       bestComboEl.textContent = bestCombo;
-      resultEl.textContent = `本回合：${combo} Combo／消除 ${cleared} 顆／倍率 ×${mult.toFixed(2)}／+${total} 分`;
+      resultEl.textContent = `本回合：${combo} Combo／消除 ${cleared} 顆`;
     } else {
       resultEl.textContent = '沒有消除任何珠子，再試一次！';
     }
@@ -664,8 +666,8 @@
 
   document.getElementById('reset').addEventListener('click', () => {
     if (state !== 'idle') return;
-    score = 0;
-    scoreEl.textContent = 0;
+    turns = totalCombo = 0;
+    avgComboEl.textContent = '0.00';
     curComboEl.textContent = 0;
     particles = [];
     pendingEnhanced = [];
