@@ -71,16 +71,25 @@
     </label>
   </div>
   <div class="modes">
+    <label class="toggle"><input type="checkbox" id="enhanceMode" checked>光珠模式</label>
     <label class="toggle"><input type="checkbox" id="purpleMode">蓄珠模式</label>
+  </div>
+  <div class="modes">
     <label class="toggle"><input type="checkbox" id="glowMode">超多珠模式</label>
+    <label class="toggle"><input type="checkbox" id="moreMode">更多珠模式</label>
+  </div>
+  <div class="modes">
+    <label class="toggle"><input type="checkbox" id="connectMode">相連模式</label>
   </div>
   <div id="purpleStatus"></div>
   <p class="hint">
     按住珠子拖曳，經過的珠子會和手上的珠子交換位置（可斜走）。<br>
     第一次交換後開始倒數，放開或時間到就結算。同色橫向或直向連成 3 顆以上即消除，落下的珠子若再相連會形成連鎖 Combo。<br>
-    每消除一組 5 顆以上的同色珠，下一次落珠會掉下一顆該顏色的發光珠。<br>
-    蓄珠模式：每消除一組紫珠，下一個回合的落珠會額外掉下 2 顆紫珠。<br>
-    超多珠模式：每消除一組紫珠，下一次落珠必定先掉下 2 顆紫色發光珠；若該組達 5 顆，另外再照五連規則多掉 1 顆。
+    光珠模式：每消除一組 5 顆以上的同色珠，下一次落珠會掉下一顆該顏色的發光珠。<br>
+    蓄珠模式：每消除一組紫珠，下一個回合的落珠會額外掉下 2 顆紫珠（最多蓄 30 顆）。<br>
+    超多珠模式：每消除一組紫珠，下一次落珠必定先掉下 2 顆紫色發光珠。<br>
+    更多珠模式（超多珠進階版，不能和光珠模式、超多珠同時開啟）：每累計消除 3 顆紫珠，下一次落珠必定先掉下 2 顆紫色發光珠。<br>
+    相連模式：同色珠只要上下左右相連達 3 顆就會消除，不必排成一直線（斜角不算相連）。切換時會重新開局。
   </p>
 </div>
 
@@ -108,7 +117,11 @@
   const purpleModeEl = document.getElementById('purpleMode');
   const purpleStatusEl = document.getElementById('purpleStatus');
   const glowModeEl = document.getElementById('glowMode');
+  const moreModeEl = document.getElementById('moreMode');
+  const enhanceModeEl = document.getElementById('enhanceMode');
+  const connectModeEl = document.getElementById('connectMode');
   const PURPLE = 4;
+  const PURPLE_MAX = 30;     // 蓄珠最多蓄 30 顆
 
   let cell = 64;
   let board = [];          // board[r][c] = orb | null
@@ -119,12 +132,14 @@
   let timerStart = 0, timerRunning = false, moved = false;
   let bestCombo = 0;
   let turns = 0, totalCombo = 0;  // 平均 Combo = 總 Combo ÷ 回合數（沒消珠的回合也算）
+  // 光珠模式
   let pendingEnhanced = [];  // 下一次落珠要掉下的發光珠顏色
   // 蓄珠模式
   let purpleNext = 0;        // 下一個回合要掉的紫珠數
   let purpleActive = 0;      // 本回合落珠還要掉的紫珠數
-  // 超多珠模式
+  // 超多珠 / 更多珠模式（兩者互斥，共用待掉數量）
   let pendingPurpleGlow = 0; // 下一次落珠必定先掉的紫色發光珠數
+  let moreCount = 0;         // 更多珠：累計消除的紫珠數（未滿 3 顆的餘數）
 
   const rand = n => Math.floor(Math.random() * n);
   const sleep = ms => new Promise(res => setTimeout(res, ms));
@@ -142,13 +157,32 @@
         let t;
         do {
           t = rand(TYPES.length);
-        } while (
-          (c >= 2 && board[r][c - 1].t === t && board[r][c - 2].t === t) ||
-          (r >= 2 && board[r - 1][c].t === t && board[r - 2][c].t === t)
+        } while (connectModeEl.checked
+          ? connectedSize(r, c, t) >= 3
+          : (c >= 2 && board[r][c - 1].t === t && board[r][c - 2].t === t) ||
+            (r >= 2 && board[r - 1][c].t === t && board[r - 2][c].t === t)
         );
         board[r].push(newOrb(t, r, c));
       }
     }
+  }
+
+  // (r, c) 放上 t 色後，和上下左右同色珠相連的總顆數（只計算盤面上已經有珠子的格子）
+  function connectedSize(r, c, t) {
+    const seen = new Set([r * COLS + c]);
+    const queue = [[r, c]];
+    while (queue.length) {
+      const [cr, cc] = queue.shift();
+      for (const [dr, dc] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nr = cr + dr, nc = cc + dc;
+        if (nr < 0 || nr >= ROWS || nc < 0 || nc >= COLS) continue;
+        const o = board[nr] && board[nr][nc];
+        if (!o || o.t !== t || seen.has(nr * COLS + nc)) continue;
+        seen.add(nr * COLS + nc);
+        queue.push([nr, nc]);
+      }
+    }
+    return seen.size;
   }
 
   function resize() {
@@ -289,6 +323,12 @@
   // ---------- 消除判定 ----------
   function findGroups() {
     const mark = Array.from({ length: ROWS }, () => Array(COLS).fill(false));
+    // 相連模式：同色上下左右相連達 3 顆即可消除，不必一直線
+    if (connectModeEl.checked) {
+      for (let r = 0; r < ROWS; r++)
+        for (let c = 0; c < COLS; c++)
+          if (connectedSize(r, c, board[r][c].t) >= 3) mark[r][c] = true;
+    }
     // 橫向
     for (let r = 0; r < ROWS; r++) {
       let c = 0;
@@ -362,23 +402,25 @@
       }
     }
     // 置換規則：只挑「原本不是該顏色」的新珠來換；沒得換的累積到下一次落珠
-    // 超多珠模式：優先把新珠子換成紫色發光珠
-    while (glowModeEl.checked && pendingPurpleGlow > 0) {
+    // 超多珠 / 更多珠模式：優先把新珠子換成紫色發光珠
+    while ((glowModeEl.checked || moreModeEl.checked) && pendingPurpleGlow > 0) {
       const orb = takeSpawned(spawned, PURPLE);
       if (!orb) break;
       orb.t = PURPLE;
       orb.enhanced = true;
       pendingPurpleGlow--;
     }
-    // 五連珠的獎勵：把新珠子換成同色發光珠
-    const leftover = [];
-    for (const t of pendingEnhanced) {
-      const orb = takeSpawned(spawned, t);
-      if (!orb) { leftover.push(t); continue; }
-      orb.t = t;
-      orb.enhanced = true;
+    // 光珠模式：把新珠子換成同色發光珠
+    if (enhanceModeEl.checked) {
+      const leftover = [];
+      for (const t of pendingEnhanced) {
+        const orb = takeSpawned(spawned, t);
+        if (!orb) { leftover.push(t); continue; }
+        orb.t = t;
+        orb.enhanced = true;
+      }
+      pendingEnhanced = leftover;
     }
-    pendingEnhanced = leftover;
     // 蓄珠模式：把剩下的新珠子換成紫珠
     while (purpleModeEl.checked && purpleActive > 0) {
       const orb = takeSpawned(spawned, PURPLE);
@@ -397,9 +439,10 @@
   }
 
   function updatePurpleStatus() {
-    purpleStatusEl.textContent = purpleModeEl.checked
-      ? `下回合額外紫珠 +${purpleNext}`
-      : '';
+    const parts = [];
+    if (purpleModeEl.checked) parts.push(`下回合額外紫珠 +${purpleNext}`);
+    if (moreModeEl.checked) parts.push(`更多珠累計 ${moreCount}/3`);
+    purpleStatusEl.textContent = parts.join('　');
   }
 
   function settled() {
@@ -431,7 +474,7 @@
     state = 'resolve';
     resultEl.textContent = '結算中…';
     curComboEl.textContent = 0;
-    purpleActive += purpleNext;
+    purpleActive = Math.min(PURPLE_MAX, purpleActive + purpleNext);
     purpleNext = 0;
     updatePurpleStatus();
     await waitSettled();
@@ -445,12 +488,15 @@
         curComboEl.textContent = combo;
         beep(combo);
         const gt = board[g[0][0]][g[0][1]].t;
-        if (g.length >= 5) pendingEnhanced.push(gt);
+        if (enhanceModeEl.checked && g.length >= 5) pendingEnhanced.push(gt);
         if (glowModeEl.checked && gt === PURPLE) pendingPurpleGlow += 2;
-        if (purpleModeEl.checked && gt === PURPLE) {
-          purpleNext += 2;
-          updatePurpleStatus();
+        if (moreModeEl.checked && gt === PURPLE) {
+          moreCount += g.length;
+          pendingPurpleGlow += Math.floor(moreCount / 3) * 2;
+          moreCount %= 3;
         }
+        if (purpleModeEl.checked && gt === PURPLE) purpleNext = Math.min(PURPLE_MAX, purpleNext + 2);
+        updatePurpleStatus();
         for (const [r, c] of g) {
           board[r][c].dying = true;
           burst(r, c, board[r][c].t);
@@ -664,25 +710,58 @@
     requestAnimationFrame(loop);
   }
 
-  document.getElementById('reset').addEventListener('click', () => {
+  document.getElementById('reset').addEventListener('click', newGame);
+  // 相連模式改變了消除判定，舊盤面可能已經有可消的組，所以切換時重新開局；轉珠或結算中不能切換
+  connectModeEl.addEventListener('change', () => {
+    if (state !== 'idle') { connectModeEl.checked = !connectModeEl.checked; return; }
+    newGame();
+  });
+
+  function newGame() {
     if (state !== 'idle') return;
     turns = totalCombo = 0;
     avgComboEl.textContent = '0.00';
     curComboEl.textContent = 0;
     particles = [];
-    pendingEnhanced = [];
-    pendingPurpleGlow = 0;
+    resetEnhance();
+    resetGlow();
     resetPurple();
     initBoard();
     resultEl.textContent = '按住任一顆珠子開始拖曳';
-  });
+  }
 
   function resetPurple() {
     purpleNext = purpleActive = 0;
     updatePurpleStatus();
   }
+  function resetGlow() {
+    pendingPurpleGlow = moreCount = 0;
+    updatePurpleStatus();
+  }
+  function resetEnhance() {
+    pendingEnhanced = [];
+  }
   purpleModeEl.addEventListener('change', resetPurple);
-  glowModeEl.addEventListener('change', () => { pendingPurpleGlow = 0; });
+  // 互斥：更多珠不能和光珠模式、超多珠同時開啟；勾選一方時自動取消另一方
+  // 用程式改 checked 不會觸發 change 事件，所以被取消的模式要在這裡自己歸零
+  const exclusiveModes = [
+    [enhanceModeEl, resetEnhance],
+    [glowModeEl, resetGlow],
+  ];
+  for (const [el, reset] of exclusiveModes) {
+    el.addEventListener('change', () => {
+      if (el.checked && moreModeEl.checked) { moreModeEl.checked = false; resetGlow(); }
+      reset();
+    });
+  }
+  moreModeEl.addEventListener('change', () => {
+    if (moreModeEl.checked) {
+      for (const [el, reset] of exclusiveModes) {
+        if (el.checked) { el.checked = false; reset(); }
+      }
+    }
+    resetGlow();
+  });
 
   window.addEventListener('resize', resize);
   resize();
